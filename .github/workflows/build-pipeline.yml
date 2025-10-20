@@ -7,41 +7,48 @@ on:
       build_args:
         description: "Arguments passed to build script"
         required: false
+        default: ""
       working_directory:
         description: "Working directory from where the build command is run"
         required: false
+        default: ""
       python_version:
         description: "Python version to use"
         required: false
+        default: ""
   push:
   pull_request:
 
-env:
-  BUILD_ARGS: ${{ secrets.BUILD_ARGS }}
-  WORKING_DIRECTORY: ${{ secrets.WORKING_DIRECTORY }}
-  PYTHON_VERSION: ${{ secrets.PYTHON_VERSION }}
+concurrency:
+  group: build-pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - name: set-input-build-args
-        if: ${{ github.event.inputs != null  &&  github.event.inputs.build_args != null}}
-        run: echo "BUILD_ARGS=${{ github.event.inputs.build_args }}" >> $GITHUB_ENV
-        # new syntax: run: echo "BUILD_ARGS=${{ github.event.inputs.build_args }}" >> "$GITHUB_ENV"
-      - name: set-input-working-directory
-        if: ${{ github.event.inputs != null  &&  github.event.inputs.working_directory != null}}
-        run: echo "WORKING_DIRECTORY=${{ github.event.inputs.working_directory }}" >> $GITHUB_ENV
-        # new syntax: run: echo "WORKING_DIRECTORY=${{ github.event.inputs.working_directory }}" >> "$GITHUB_ENV"
-      - name: set-input-python-version
-        if: ${{ github.event.inputs != null  &&  github.event.inputs.python_version != null}}
-        run: echo "PYTHON_VERSION=${{ github.event.inputs.python_version }}" >> $GITHUB_ENV
-        # new syntax: run: echo "PYTHON_VERSION=${{ github.event.inputs.python_version }}" >> "$GITHUB_ENV"
-      # Set host ip to env variable to be uside within container actions
-      - name: set-host-ip
-        run: echo "_HOST_IP=$(hostname -I | cut -d ' ' -f 1)" >> $GITHUB_ENV
-      - uses: actions/checkout@v4
-      - name: run-build-scripts
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare environment variables
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prefer workflow_dispatch inputs, fall back to repository secrets, otherwise empty string.
+          echo "BUILD_ARGS=${{ github.event.inputs.build_args || secrets.BUILD_ARGS || '' }}" >> "$GITHUB_ENV"
+          echo "WORKING_DIRECTORY=${{ github.event.inputs.working_directory || secrets.WORKING_DIRECTORY || '' }}" >> "$GITHUB_ENV"
+          echo "PYTHON_VERSION=${{ github.event.inputs.python_version || secrets.PYTHON_VERSION || '' }}" >> "$GITHUB_ENV"
+
+          # Set host IP for use inside container actions. Use robust method with fallback.
+          HOST_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I 2>/dev/null | awk '{print $1}')
+          echo "_HOST_IP=${HOST_IP:-127.0.0.1}" >> "$GITHUB_ENV"
+
+      - name: Run build scripts
         uses: ./.github/actions/build-environment
         with:
           build_args: ${{ env.BUILD_ARGS }}
